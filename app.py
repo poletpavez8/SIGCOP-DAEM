@@ -20,8 +20,7 @@ archivo_subido = st.sidebar.file_uploader(
     type=["xlsx", "xls", "csv"]
 )
 
-@st.cache_data(ttl=5)
-def extraer_datos_sep(file_input, mtime=0):
+def extraer_datos_sep(file_input):
     """Extrae y consolida datos de planillas de control financiero tipo SEP (multihoja por escuela)."""
     try:
         xls = pd.ExcelFile(file_input)
@@ -99,9 +98,8 @@ def limpiar_columnas_no_deseadas(df):
     return df.drop(columns=cols_a_borrar, errors='ignore')
 
 
-@st.cache_data(ttl=5)
-def cargar_datos(file_input, mtime=0):
-    df_sep = extraer_datos_sep(file_input, mtime)
+def cargar_datos(file_input):
+    df_sep = extraer_datos_sep(file_input)
     if df_sep is not None and not df_sep.empty:
         return limpiar_columnas_no_deseadas(df_sep)
 
@@ -152,14 +150,13 @@ def cargar_datos(file_input, mtime=0):
 
 try:
     if archivo_subido is not None:
-        df = cargar_datos(archivo_subido, getattr(archivo_subido, 'size', 0))
+        df = cargar_datos(archivo_subido)
         st.success(f"✅ Datos cargados correctamente desde: **{archivo_subido.name}**")
     else:
         archivos_locales = glob.glob("*.xlsx") + glob.glob("*.xls") + glob.glob("*.csv")
         if archivos_locales:
             archivo_target = archivos_locales[0]
-            mtime = os.path.getmtime(archivo_target) if os.path.exists(archivo_target) else 0
-            df = cargar_datos(archivo_target, mtime)
+            df = cargar_datos(archivo_target)
             st.info(f"ℹ️ Mostrando planilla por defecto: **{archivo_target}**")
         else:
             st.warning("⚠️ No se encontró ninguna planilla. Por favor, sube un archivo Excel desde el panel izquierdo.")
