@@ -23,9 +23,12 @@ archivo_subido = st.sidebar.file_uploader(
 @st.cache_data
 def extraer_datos_sep(file_input):
     """Extrae y consolida datos de planillas de control financiero tipo SEP (multihoja por escuela)."""
-    xls = pd.ExcelFile(file_input)
-    registros = []
+    try:
+        xls = pd.ExcelFile(file_input)
+    except Exception:
+        return None
 
+    registros = []
     # Hojas a ignorar (resúmenes o tablas no operativas)
     hojas_omitir = ['SUBVENCION', 'COSTO REMUNERACION ', 'PROPORCION GASTOS AC', '10% AC SEP']
 
@@ -43,10 +46,9 @@ def extraer_datos_sep(file_input):
                 nombre_escuela = val.replace("ESCUELA:", "").replace("Escuela:", "").strip()
                 break
 
-        # Buscar las filas que contienen transacciones (Fecha, SOL, OC, DP, Categoria, Detalle, Gastos)
+        # Buscar las filas que contienen transacciones
         for i in range(len(df_sheet)):
             row = df_sheet.iloc[i].tolist()
-            # Detectar filas con fecha válida o identificador de solicitud/gasto
             fecha = row[1] if len(row) > 1 else None
             sol = str(row[2]) if len(row) > 2 and pd.notna(row[2]) else ""
             oc = str(row[3]) if len(row) > 3 and pd.notna(row[3]) else ""
@@ -60,7 +62,6 @@ def extraer_datos_sep(file_input):
                 try:
                     monto = float(gasto) if pd.notna(gasto) else 0.0
                     if monto > 0:
-                        # Determinar Estado
                         estado = "Pagada" if dp and dp.upper() != "PENDIENTE" and dp.upper() != "NAN" else ("En Compra" if oc else "Solicitada")
                         registros.append({
                             "Cod_Solicitud": f"SOL-{sol}" if sol else "S/N",
@@ -89,7 +90,7 @@ def cargar_datos(file_input):
     if df_sep is not None and not df_sep.empty:
         return df_sep
 
-    # Si es una planilla tabular estándar (plana)
+    # Si es una planilla tabular estándar
     if isinstance(file_input, str):
         df_raw = pd.read_excel(file_input, header=None) if file_input.endswith(('.xlsx', '.xls')) else pd.read_csv(file_input, sep=None, engine='python')
     else:
@@ -109,7 +110,7 @@ def cargar_datos(file_input):
         df = pd.read_excel(file_input, header=header_row) if file_input.endswith(('.xlsx', '.xls')) else pd.read_csv(file_input, sep=None, engine='python')
     else:
         file_input.seek(0)
-        df = pd.read_excel(file_input, header=header_row) if file_input.name.endswith(('.xlsx', '.xls')):
+        if file_input.name.endswith(('.xlsx', '.xls')):
             df = pd.read_excel(file_input, header=header_row)
         else:
             df = pd.read_csv(file_input, sep=None, engine='python')
