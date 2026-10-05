@@ -16,55 +16,113 @@ st.caption("Sistema Integrado de Gestión, Control Interno y Seguimiento del Cic
 # BOTÓN DE CARGA EN EL PANEL LATERAL
 st.sidebar.header("📁 Cargar Datos")
 archivo_subido = st.sidebar.file_uploader(
-    "Sube una nueva planilla Excel (.xlsx, .xls) o CSV", 
+    "Sube una planilla Excel (.xlsx, .xls) o CSV", 
     type=["xlsx", "xls", "csv"]
 )
 
 @st.cache_data
-def procesar_datos(file_input):
-    # Detectar si se subió un archivo desde la web o si leemos el local
+def extraer_datos_sep(file_input):
+    """Extrae y consolida datos de planillas de control financiero tipo SEP (multihoja por escuela)."""
+    xls = pd.ExcelFile(file_input)
+    registros = []
+
+    # Hojas a ignorar (resúmenes o tablas no operativas)
+    hojas_omitir = ['SUBVENCION', 'COSTO REMUNERACION ', 'PROPORCION GASTOS AC', '10% AC SEP']
+
+    for sheet in xls.sheet_names:
+        if sheet.strip() in hojas_omitir:
+            continue
+            
+        df_sheet = pd.read_excel(file_input, sheet_name=sheet, header=None)
+        
+        # Extraer el nombre de la Escuela desde las primeras filas
+        nombre_escuela = sheet
+        for i in range(min(6, len(df_sheet))):
+            val = str(df_sheet.iloc[i, 1]) if len(df_sheet.columns) > 1 else ""
+            if "ESCUELA:" in val.upper() or "ESCUELA :" in val.upper():
+                nombre_escuela = val.replace("ESCUELA:", "").replace("Escuela:", "").strip()
+                break
+
+        # Buscar las filas que contienen transacciones (Fecha, SOL, OC, DP, Categoria, Detalle, Gastos)
+        for i in range(len(df_sheet)):
+            row = df_sheet.iloc[i].tolist()
+            # Detectar filas con fecha válida o identificador de solicitud/gasto
+            fecha = row[1] if len(row) > 1 else None
+            sol = str(row[2]) if len(row) > 2 and pd.notna(row[2]) else ""
+            oc = str(row[3]) if len(row) > 3 and pd.notna(row[3]) else ""
+            dp = str(row[4]) if len(row) > 4 and pd.notna(row[4]) else ""
+            categoria = str(row[5]) if len(row) > 5 and pd.notna(row[5]) else ""
+            detalle = str(row[6]) if len(row) > 6 and pd.notna(row[6]) else ""
+            gasto = row[8] if len(row) > 8 and pd.notna(row[8]) else 0
+
+            # Validar si es un registro real de gasto
+            if pd.notna(fecha) and str(fecha).strip() not in ["FECHA", "ENERO", "FEBRERO", "MARZO", "ABRIL", "MAYO", "JUNIO", "JULIO", "AGOSTO", "SEPTIEMBRE", "OCTUBRE", "NOVIEMBRE", "DICIEMBRE", "nan"]:
+                try:
+                    monto = float(gasto) if pd.notna(gasto) else 0.0
+                    if monto > 0:
+                        # Determinar Estado
+                        estado = "Pagada" if dp and dp.upper() != "PENDIENTE" and dp.upper() != "NAN" else ("En Compra" if oc else "Solicitada")
+                        registros.append({
+                            "Cod_Solicitud": f"SOL-{sol}" if sol else "S/N",
+                            "Fecha_Solicitud": str(fecha)[:10],
+                            "Escuela": nombre_escuela,
+                            "Orden_Compra": oc if oc else "PENDIENTE",
+                            "Decreto_Pago": dp if dp else "PENDIENTE",
+                            "Categoria": categoria,
+                            "Detalle": detalle,
+                            "Monto_Estimado": monto,
+                            "Estado": estado,
+                            "Alerta_Riesgo": "🟢 Normal" if estado == "Pagada" else "🟡 Riesgo Atendible"
+                        })
+                except ValueError:
+                    continue
+
+    if registros:
+        return pd.DataFrame(registros)
+    return None
+
+
+@st.cache_data
+def cargar_datos(file_input):
+    # Intentar extracción especializada tipo Control SEP
+    df_sep = extraer_datos_sep(file_input)
+    if df_sep is not None and not df_sep.empty:
+        return df_sep
+
+    # Si es una planilla tabular estándar (plana)
     if isinstance(file_input, str):
-        # Es una ruta de archivo local
         df_raw = pd.read_excel(file_input, header=None) if file_input.endswith(('.xlsx', '.xls')) else pd.read_csv(file_input, sep=None, engine='python')
     else:
-        # Es un archivo subido a través del botón web
         if file_input.name.endswith(('.xlsx', '.xls')):
             df_raw = pd.read_excel(file_input, header=None)
         else:
             df_raw = pd.read_csv(file_input, sep=None, engine='python')
         
-    # Detectar en qué fila están los encabezados reales
     header_row = 0
     for i, row in df_raw.iterrows():
         row_str = [str(cell).lower() for cell in row.tolist()]
-        if any("fecha_solicitud" in cell or "solicitud" in cell for cell in row_str):
+        if any("fecha_solicitud" in cell or "solicitud" in cell or "escuela" in cell for cell in row_str):
             header_row = i
             break
             
-    # Volver a leer desde la fila detectada
     if isinstance(file_input, str):
         df = pd.read_excel(file_input, header=header_row) if file_input.endswith(('.xlsx', '.xls')) else pd.read_csv(file_input, sep=None, engine='python')
     else:
         file_input.seek(0)
-        df = pd.read_excel(file_input, header=header_row) if file_input.name.endswith(('.xlsx', '.xls')) else pd.read_csv(file_input, sep=None, engine='python')
+        df = pd.read_excel(file_input, header=header_row) if file_input.name.endswith(('.xlsx', '.xls')):
+            df = pd.read_excel(file_input, header=header_row)
+        else:
+            df = pd.read_csv(file_input, sep=None, engine='python')
 
-    # Eliminar columnas vacías 'Unnamed'
     df = df.loc[:, ~df.columns.astype(str).str.contains('^Unnamed', na=False)]
-
-    # Limpieza de espacios y caracteres invisibles en nombres de columnas
-    df.columns = (
-        df.columns.astype(str)
-        .str.strip()
-        .str.replace('\ufeff', '', regex=False)
-    )
+    df.columns = df.columns.astype(str).str.strip().str.replace('\ufeff', '', regex=False)
     
-    # Mapeo flexible para estandarizar nombres
     column_mapping = {}
     for col in df.columns:
         col_clean = col.lower().replace(" ", "_").replace("-", "_")
         if "fecha" in col_clean and "solicitud" in col_clean:
             column_mapping[col] = "Fecha_Solicitud"
-        elif "monto" in col_clean:
+        elif "monto" in col_clean or "gasto" in col_clean:
             column_mapping[col] = "Monto_Estimado"
         elif "estado" in col_clean:
             column_mapping[col] = "Estado"
@@ -73,22 +131,20 @@ def procesar_datos(file_input):
         elif "alerta" in col_clean or "riesgo" in col_clean:
             column_mapping[col] = "Alerta_Riesgo"
 
-    df = df.rename(columns=column_mapping)
-    return df
+    return df.rename(columns=column_mapping)
+
 
 try:
-    # Lógica de carga: usa el archivo subido desde la web o el predeterminado del repositorio
     if archivo_subido is not None:
-        df = procesar_datos(archivo_subido)
-        st.success(f"✅ Mostrando datos cargados desde: **{archivo_subido.name}**")
+        df = cargar_datos(archivo_subido)
+        st.success(f"✅ Datos consolidados correctamente desde: **{archivo_subido.name}**")
     else:
-        # Buscar el archivo local
         archivos_locales = glob.glob("*.xlsx") + glob.glob("*.xls") + glob.glob("*.csv")
         if archivos_locales:
-            df = procesar_datos(archivos_locales[0])
+            df = cargar_datos(archivos_locales[0])
             st.info(f"ℹ️ Mostrando planilla por defecto: **{archivos_locales[0]}**")
         else:
-            st.warning("⚠️ No se encontró ninguna planilla por defecto. Por favor, sube un archivo Excel desde el panel izquierdo.")
+            st.warning("⚠️ No se encontró ninguna planilla. Por favor, sube un archivo Excel desde el panel izquierdo.")
             st.stop()
 
     # Métrica Resumen (KPIs)
@@ -97,11 +153,11 @@ try:
     total_solicitudes = len(df)
     monto_total = df["Monto_Estimado"].sum() if "Monto_Estimado" in df.columns else 0
     
-    col1.metric("Total Solicitudes", f"{total_solicitudes}")
-    col2.metric("Monto Total Estimado", f"${monto_total:,.0f}".replace(",", "."))
+    col1.metric("Total Solicitudes / Gastos", f"{total_solicitudes}")
+    col2.metric("Monto Total Ejecutado/Estimado", f"${monto_total:,.0f}".replace(",", "."))
     
     if "Estado" in df.columns:
-        pendientes = df[df["Estado"].astype(str).str.contains("PENDIENTE|Facturada|Ingresada|En Revision", case=False, na=False)].shape[0]
+        pendientes = df[df["Estado"].astype(str).str.contains("PENDIENTE|Facturada|Ingresada|En Revision|Solicitada|En Compra", case=False, na=False)].shape[0]
         col3.metric("Trámites Pendientes", f"{pendientes}")
     
     if "Alerta_Riesgo" in df.columns:
@@ -110,7 +166,7 @@ try:
 
     st.markdown("---")
 
-    # Filtros de búsqueda en la barra lateral
+    # Filtros de búsqueda laterales
     st.sidebar.markdown("---")
     st.sidebar.header("Filtros de Búsqueda")
     if "Escuela" in df.columns:
@@ -126,7 +182,7 @@ try:
             df = df[df["Estado"] == estado_sel]
 
     # Tabla principal
-    st.subheader("📋 Registro General de Solicitudes de Compras y Pagos")
+    st.subheader("📋 Consolidado General de Solicitudes y Gastos SEP")
     st.dataframe(df, use_container_width=True)
 
     # Gráficos
@@ -141,9 +197,9 @@ try:
 
     with col_g2:
         if "Escuela" in df.columns and "Monto_Estimado" in df.columns:
-            st.write("**Monto Estimado por Establecimiento**")
+            st.write("**Gasto Total por Escuela / Establecimiento**")
             monto_escuela = df.groupby("Escuela")["Monto_Estimado"].sum()
             st.bar_chart(monto_escuela)
 
 except Exception as e:
-    st.error(f"Ocurrió un detalle al procesar el archivo: {e}")
+    st.error(f"Ocurrió un detalle al procesar la planilla: {e}")
