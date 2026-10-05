@@ -29,7 +29,7 @@ def extraer_datos_sep(file_input):
         return None
 
     registros = []
-    # Hojas a ignorar (resúmenes o tablas no operativas)
+    # Hojas a ignorar
     hojas_omitir = ['SUBVENCION', 'COSTO REMUNERACION ', 'PROPORCION GASTOS AC', '10% AC SEP']
 
     for sheet in xls.sheet_names:
@@ -38,7 +38,7 @@ def extraer_datos_sep(file_input):
             
         df_sheet = pd.read_excel(file_input, sheet_name=sheet, header=None)
         
-        # Extraer el nombre de la Escuela desde las primeras filas
+        # Extraer el nombre de la Escuela
         nombre_escuela = sheet
         for i in range(min(6, len(df_sheet))):
             val = str(df_sheet.iloc[i, 1]) if len(df_sheet.columns) > 1 else ""
@@ -46,7 +46,7 @@ def extraer_datos_sep(file_input):
                 nombre_escuela = val.replace("ESCUELA:", "").replace("Escuela:", "").strip()
                 break
 
-        # Buscar las filas que contienen transacciones
+        # Buscar filas con transacciones
         for i in range(len(df_sheet)):
             row = df_sheet.iloc[i].tolist()
             fecha = row[1] if len(row) > 1 else None
@@ -57,7 +57,7 @@ def extraer_datos_sep(file_input):
             detalle = str(row[6]) if len(row) > 6 and pd.notna(row[6]) else ""
             gasto = row[8] if len(row) > 8 and pd.notna(row[8]) else 0
 
-            # Validar si es un registro real de gasto
+            # Validar si es registro de gasto
             if pd.notna(fecha) and str(fecha).strip() not in ["FECHA", "ENERO", "FEBRERO", "MARZO", "ABRIL", "MAYO", "JUNIO", "JULIO", "AGOSTO", "SEPTIEMBRE", "OCTUBRE", "NOVIEMBRE", "DICIEMBRE", "nan"]:
                 try:
                     monto = float(gasto) if pd.notna(gasto) else 0.0
@@ -83,14 +83,29 @@ def extraer_datos_sep(file_input):
     return None
 
 
+def limpiar_columnas_no_deseadas(df):
+    """Elimina las columnas de Proveedor, RUT, Certificado Presupuestario, Acta de Recepción y Factura."""
+    columnas_excluir = [
+        'proveedor', 'proveedores', 'rut_proveedor', 'rut', 'rut_de_proveedor',
+        'certificado_presupuestario', 'cp', 'certificado',
+        'acta_recepcion_conforme', 'acta_recepcion', 'acta', 'arc',
+        'factura_folio', 'factura', 'folio_factura'
+    ]
+    cols_a_borrar = []
+    for col in df.columns:
+        col_clean = str(col).lower().replace(" ", "_").replace("-", "_").strip()
+        if col_clean in columnas_excluir:
+            cols_a_borrar.append(col)
+            
+    return df.drop(columns=cols_a_borrar, errors='ignore')
+
+
 @st.cache_data
 def cargar_datos(file_input):
-    # Intentar extracción especializada tipo Control SEP
     df_sep = extraer_datos_sep(file_input)
     if df_sep is not None and not df_sep.empty:
-        return df_sep
+        return limpiar_columnas_no_deseadas(df_sep)
 
-    # Si es una planilla tabular estándar
     if isinstance(file_input, str):
         df_raw = pd.read_excel(file_input, header=None) if file_input.endswith(('.xlsx', '.xls')) else pd.read_csv(file_input, sep=None, engine='python')
     else:
@@ -132,13 +147,14 @@ def cargar_datos(file_input):
         elif "alerta" in col_clean or "riesgo" in col_clean:
             column_mapping[col] = "Alerta_Riesgo"
 
-    return df.rename(columns=column_mapping)
+    df = df.rename(columns=column_mapping)
+    return limpiar_columnas_no_deseadas(df)
 
 
 try:
     if archivo_subido is not None:
         df = cargar_datos(archivo_subido)
-        st.success(f"✅ Datos consolidados correctamente desde: **{archivo_subido.name}**")
+        st.success(f"✅ Datos cargados correctamente desde: **{archivo_subido.name}**")
     else:
         archivos_locales = glob.glob("*.xlsx") + glob.glob("*.xls") + glob.glob("*.csv")
         if archivos_locales:
