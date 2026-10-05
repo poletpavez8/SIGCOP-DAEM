@@ -21,17 +21,16 @@ archivo_subido = st.sidebar.file_uploader(
 )
 
 def extraer_datos_sep(file_input):
-    """Extrae y consolida datos de planillas de control financiero tipo SEP (multihoja por escuela)."""
     try:
         xls = pd.ExcelFile(file_input)
     except Exception:
         return None
 
     registros = []
-    hojas_omitir = ['SUBVENCION', 'COSTO REMUNERACION ', 'PROPORCION GASTOS AC', '10% AC SEP']
+    hojas_omitir = ['subvencion', 'costo remuneracion', 'proporcion gastos ac', '10% ac sep']
 
     for sheet in xls.sheet_names:
-        if sheet.strip() in hojas_omitir:
+        if any(h in sheet.lower().strip() for h in hojas_omitir):
             continue
             
         df_sheet = pd.read_excel(file_input, sheet_name=sheet, header=None)
@@ -56,33 +55,32 @@ def extraer_datos_sep(file_input):
             gasto = row[8] if len(row) > 8 and pd.notna(row[8]) else 0
 
             # Validar si es registro de gasto
-            if pd.notna(fecha) and str(fecha).strip() not in ["FECHA", "ENERO", "FEBRERO", "MARZO", "ABRIL", "MAYO", "JUNIO", "JULIO", "AGOSTO", "SEPTIEMBRE", "OCTUBRE", "NOVIEMBRE", "DICIEMBRE", "nan"]:
+            val_f = str(fecha).strip().upper() if pd.notna(fecha) else ""
+            if val_f and not any(k in val_f for k in ["FECHA", "ENERO", "FEBRERO", "MARZO", "ABRIL", "MAYO", "JUNIO", "JULIO", "AGOSTO", "SEPTIEMBRE", "OCTUBRE", "NOVIEMBRE", "DICIEMBRE", "NAN", "UNIDAD", "LEY SEP", "DIRECTOR", "SECTOR", "RBD"]):
                 try:
                     monto = float(gasto) if pd.notna(gasto) else 0.0
                     if monto > 0:
                         estado = "Pagada" if dp and dp.upper() != "PENDIENTE" and dp.upper() != "NAN" else ("En Compra" if oc else "Solicitada")
                         registros.append({
-                            "Cod_Solicitud": f"SOL-{sol}" if sol else "S/N",
+                            "Cod_Solicitud": f"SOL-{sol}" if sol and sol.upper() != "NAN" else "S/N",
                             "Fecha_Solicitud": str(fecha)[:10],
                             "Escuela": nombre_escuela,
-                            "Orden_Compra": oc if oc else "PENDIENTE",
-                            "Decreto_Pago": dp if dp else "PENDIENTE",
-                            "Categoria": categoria,
-                            "Detalle": detalle,
+                            "Orden_Compra": oc if oc and oc.upper() != "NAN" else "PENDIENTE",
+                            "Decreto_Pago": dp if dp and dp.upper() != "NAN" else "PENDIENTE",
+                            "Categoria": categoria if categoria and categoria.upper() != "NAN" else "-",
+                            "Detalle": detalle if detalle and detalle.upper() != "NAN" else "-",
                             "Monto_Estimado": monto,
                             "Estado": estado,
                             "Alerta_Riesgo": "🟢 Normal" if estado == "Pagada" else "🟡 Riesgo Atendible"
                         })
-                except ValueError:
+                except (ValueError, TypeError):
                     continue
 
     if registros:
         return pd.DataFrame(registros)
     return None
 
-
 def limpiar_columnas_no_deseadas(df):
-    """Elimina las columnas no requeridas."""
     columnas_excluir = [
         'proveedor', 'proveedores', 'rut_proveedor', 'rut', 'rut_de_proveedor',
         'certificado_presupuestario', 'cp', 'certificado',
@@ -96,7 +94,6 @@ def limpiar_columnas_no_deseadas(df):
             cols_a_borrar.append(col)
             
     return df.drop(columns=cols_a_borrar, errors='ignore')
-
 
 def cargar_datos(file_input):
     df_sep = extraer_datos_sep(file_input)
@@ -147,7 +144,6 @@ def cargar_datos(file_input):
     df = df.rename(columns=column_mapping)
     return limpiar_columnas_no_deseadas(df)
 
-
 try:
     if archivo_subido is not None:
         df = cargar_datos(archivo_subido)
@@ -162,9 +158,7 @@ try:
             st.warning("⚠️ No se encontró ninguna planilla. Por favor, sube un archivo Excel desde el panel izquierdo.")
             st.stop()
 
-    # Métrica Resumen (KPIs)
     col1, col2, col3, col4 = st.columns(4)
-    
     total_solicitudes = len(df)
     monto_total = df["Monto_Estimado"].sum() if "Monto_Estimado" in df.columns else 0
     
@@ -180,8 +174,6 @@ try:
         col4.metric("Alertas de Riesgo", f"{alertas}")
 
     st.markdown("---")
-
-    # Filtros de búsqueda laterales
     st.sidebar.markdown("---")
     st.sidebar.header("Filtros de Búsqueda")
     if "Escuela" in df.columns:
@@ -196,11 +188,9 @@ try:
         if estado_sel != "Todos":
             df = df[df["Estado"] == estado_sel]
 
-    # Tabla principal
     st.subheader("📋 Consolidado General de Solicitudes y Gastos SEP")
     st.dataframe(df, use_container_width=True)
 
-    # Gráficos
     st.markdown("---")
     st.subheader("📈 Análisis y Control de Procesos")
     col_g1, col_g2 = st.columns(2)
